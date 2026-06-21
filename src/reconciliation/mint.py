@@ -1,17 +1,23 @@
 """
-层次调和模块: MinT + GA-MinT
+层次调和模块: MinT + GA-MinT + Bayes-GA-MinT + 高斯投影概率调和
 
 包含:
   - MinTDiag       : 对角协方差 MinT
-  - MinTShrink     : Ledoit-Wolf 收缩 MinT (当前论文使用)
-  - GAMinT_BD      : GA-MinT 块对角 (新增)
-  - GAMinT_GAS     : GA-MinT 分组感知收缩 (新增)
+  - MinTShrink     : Ledoit-Wolf 收缩 MinT
+  - GAMinT_BD      : GA-MinT 块对角
+  - GAMinT_GAS     : GA-MinT 分组感知收缩
+  - BayesGAMinT    : 贝叶斯块对角 IW 先验 MinT
   - QuantileMinT   : 分位数特定协方差 MinT (E6)
+
+概率调和 (Panagiotelis et al., 2023):
+  基预测 N(ŷ, W) → 调和后 N(S·G·ŷ, S·G·W·G^T·S^T)
+  → reconciled_gaussian() + gaussian_quantiles()
 
 用法:
     rec = MinTShrink(S)
-    rec.fit(residuals_val)               # 从验证集残差估计 W → 计算 G
-    reconciled = rec.reconcile(y_hat)     # y_hat: (T, N_total) → (T, N_total)
+    rec.fit(residuals_val)
+    y_tilde, W_tilde = rec.reconciled_gaussian(y_hat)  # 全分布调和
+    q = rec.gaussian_quantiles(y_tilde[:,:n_b], W_tilde[:n_b,:n_b], taus)
 """
 
 import numpy as np
@@ -67,6 +73,59 @@ class BaseReconciler(ABC):
         W_inv = np.linalg.inv(W_reg)
         STS_inv = np.linalg.inv(self.S.T @ W_inv @ self.S)
         return STS_inv @ self.S.T @ W_inv
+
+    # ── 高斯投影概率调和 (Panagiotelis et al., 2023) ──
+
+    def reconciled_gaussian(self, y_hat: np.ndarray) -> tuple:
+        """
+        高斯投影调和: 对整个概率分布做线性投影
+
+        理论:
+          如果基预测分布是 N(ŷ, W), 则调和后分布为 N(μ̃, Σ̃)
+          其中 μ̃ = S G ŷ, Σ̃ = S G W G^T S^T
+          (Panagiotelis et al., 2023, EJOR; Wickramasuriya, 2024)
+
+        参数:
+          y_hat: (T, N_total) 基预测 (中位数, 即高斯均值)
+
+        返回:
+          y_tilde: (T, N_total) 调和后均值
+          W_tilde: (N_total, N_total) 调和后协方差矩阵
+        """
+        if self.G is None or self.W is None:
+            raise RuntimeError("Must call .fit() before .reconciled_gaussian()")
+
+        y_tilde = self.reconcile(y_hat)
+        W_tilde = self.S @ self.G @ self.W @ self.G.T @ self.S.T
+        return y_tilde, W_tilde
+
+    @staticmethod
+    def gaussian_quantiles(mean: np.ndarray, cov: np.ndarray,
+                           taus: list) -> np.ndarray:
+        """
+        从高斯分布计算分位数
+
+        参数:
+          mean: (T,) 或 (T, N) — 调和后均值
+          cov:  (N, N) — 调和后协方差矩阵
+          taus: list — 分位点
+
+        返回:
+          quantiles: (T, N, len(taus))
+        """
+        from scipy.stats import norm
+
+        if mean.ndim == 1:
+            mean = mean.reshape(-1, 1)
+        T, N = mean.shape
+        z = norm.ppf(taus)  # (n_taus,)
+        var = np.maximum(np.diag(cov), 0)
+        std = np.sqrt(var)
+
+        quantiles = np.zeros((T, N, len(taus)))
+        for i, zv in enumerate(z):
+            quantiles[:, :, i] = mean + zv * std
+        return quantiles
 
 
 # ═══════════════════════════════════════════════════════════════
