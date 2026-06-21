@@ -145,4 +145,4 @@ experiments:
     hierarchy: behavior
     bottom_strategy: grouped
     group_source: behavior
-    reconciliation: [mint_shrink, ga_mint_bd, ga_mint_gas]
+    reconciliation: [mint_shrink, ga_mint_bd, ga_mint_gas, bayes_gamint]

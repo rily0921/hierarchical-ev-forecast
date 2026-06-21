@@ -11,7 +11,7 @@ from pathlib import Path
 warnings.filterwarnings('ignore')
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.reconciliation.mint import MinTShrink, GAMinT_BD, GAMinT_GAS
+from src.reconciliation.mint import MinTShrink, GAMinT_BD, GAMinT_GAS, BayesGAMinT
 from src.evaluation.metrics import point_metrics, reconciliation_gain
 
 OUT = Path('output')
@@ -96,6 +96,7 @@ def main(exp_dirs):
         'mint_shrink': MinTShrink,
         'ga_mint_bd': GAMinT_BD,
         'ga_mint_gas': GAMinT_GAS,
+        'bayes_gamint': BayesGAMinT,
     }
 
     print(f"\n{'='*70}")
@@ -117,7 +118,7 @@ def main(exp_dirs):
 
         for method_name, ReconcilerCls in methods.items():
             t0 = time.time()
-            if 'ga_mint' in method_name:
+            if 'ga_mint' in method_name or 'bayes' in method_name:
                 rec = ReconcilerCls(data['S'], data['group_labels'])
             else:
                 rec = ReconcilerCls(data['S'])

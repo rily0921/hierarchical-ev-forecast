@@ -276,3 +276,159 @@ class QuantileSpecificMinT:
         if 'mid' in self.reconcilers:
             return self.reconcilers['mid'].reconcile(y_hat)
         raise RuntimeError("No reconciler available")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Bayesian GA-MinT (Bayes-GA-MinT)
+# ═══════════════════════════════════════════════════════════════
+
+class BayesGAMinT(BaseReconciler):
+    """
+    贝叶斯分组感知 MinT — 块对角 IW 先验 + MinT 投影修订
+
+    理论动机:
+      分组建模 → 同组节点误差相关, 不同组近似独立
+      → W 具有块对角结构 → 在 W 上放置块对角 IW 先验
+      → 后验均值 ≈ 频率学派 GA-MinT (GAMinT_BD)
+      → 后验预测为多元 t 分布 (由于 W 的不确定性)
+
+    与 GAMinT_BD 的关系:
+      GAMinT_BD: Ψ' 强制块对角 → 点预测好, 但预测区间忽略组间相关性
+      BayesGAMinT: Ψ₀ 块对角 (先验), Ψ' = Ψ₀ + R^T R (后验, 含组间关联)
+                   → 点预测 = MinT 投影, 预测区间 = t 分布
+
+    用法:
+      bayes = BayesGAMinT(S, group_labels)
+      bayes.fit(residuals)                    # IW 后验估计
+      reconciled = bayes.reconcile(y_hat)      # MinT 点预测
+      pi = bayes.prediction_interval(0.9)      # t 分布预测区间
+    """
+
+    def __init__(self, S: np.ndarray, group_labels: np.ndarray,
+                 min_eig: float = 1e-8):
+        super().__init__(S, min_eig)
+        self.group_labels = group_labels
+        self.G = len(np.unique(group_labels))
+        self.Psi_prime = None
+        self.nu_prime = None
+        self.n_bottom = S.shape[1]
+        self.n_total = S.shape[0]
+        self.n_upper = self.n_total - self.n_bottom
+        self.tilde_b = None
+        self.tilde_nu = None
+
+    def fit(self, residuals: np.ndarray, nu0: float = None):
+        """
+        IW 后验估计: 块对角先验 + 高斯似然 → IW 后验
+
+        参数:
+          residuals: (T_val, N_total) 验证集基预测残差
+          nu0:       先验自由度, 默认 n_bottom + 10
+        """
+        T_val = residuals.shape[0]
+        residuals_bottom = residuals[:, :self.n_bottom]
+        n_b = self.n_bottom
+
+        # 1. 块对角先验 Ψ₀: 组内 Ledoit-Wolf 收缩
+        Psi_0 = np.zeros((n_b, n_b))
+        for g in range(self.G):
+            idx = np.where(self.group_labels == g)[0]
+            if len(idx) == 0:
+                continue
+            R_g = residuals_bottom[:, idx]
+            Psi_g = (R_g.T @ R_g) / (T_val - 1)
+            lam = self._estimate_shrinkage(R_g)
+            Psi_g = (1 - lam) * Psi_g + lam * np.diag(np.diag(Psi_g))
+            Psi_0[np.ix_(idx, idx)] = Psi_g
+
+        # 2. 先验自由度
+        nu0_val = max(nu0, n_b + 2) if nu0 is not None else n_b + 10
+
+        # 3. 后验: Ψ' = Ψ₀(块对角) + R_full^T R_full (全矩阵)
+        #    先验约束组内, 数据引入组间关联
+        self.Psi_prime = Psi_0 + residuals_bottom.T @ residuals_bottom
+        self.nu_prime = nu0_val + T_val
+
+        # 4. 加入上层 (使用全残差, 维度小无估计困难)
+        if self.n_upper > 0:
+            res_up = residuals[:, self.n_bottom:]
+            Psi_full = np.zeros((self.n_total, self.n_total))
+            Psi_full[:n_b, :n_b] = self.Psi_prime
+            Psi_full[n_b:, n_b:] = res_up.T @ res_up
+            Psi_full[n_b:, :n_b] = res_up.T @ residuals_bottom
+            Psi_full[:n_b, n_b:] = residuals_bottom.T @ res_up
+            self.Psi_prime = Psi_full
+
+        return self
+
+    def _estimate_shrinkage(self, R: np.ndarray) -> float:
+        """Ledoit-Wolf 收缩系数"""
+        T, n = R.shape
+        S = (R.T @ R) / (T - 1)
+        d2 = np.sum((S - np.diag(np.diag(S))) ** 2)
+        b2 = sum(np.sum((np.outer(R[t, :], R[t, :]) - S) ** 2)
+                 for t in range(T)) / (T ** 2)
+        return min(b2 / max(d2, 1e-12), 1.0)
+
+    def reconcile(self, y_hat: np.ndarray) -> np.ndarray:
+        """
+        MinT 投影修订 — 点预测
+
+        y_hat: (T, N_total) 或 (N_total,)
+        返回: 同形状的修订预测
+        """
+        if self.Psi_prime is None:
+            raise RuntimeError("Must call .fit() before .reconcile()")
+
+        was_1d = y_hat.ndim == 1
+        if was_1d:
+            y_hat = y_hat.reshape(-1, 1)
+
+        W = self.Psi_prime + np.eye(self.n_total) * self.min_eig
+        W_inv = np.linalg.inv(W)
+        STS_inv = np.linalg.inv(self.S.T @ W_inv @ self.S)
+        G = STS_inv @ self.S.T @ W_inv
+
+        result = (self.S @ G @ y_hat.T).T
+        self.tilde_b = (G @ y_hat.T)[:self.n_bottom, :].T
+        self.tilde_nu = self.nu_prime - self.n_bottom + 1
+        self.G = G
+
+        return result.ravel() if was_1d else result
+
+    def prediction_interval(self, level: float = 0.9) -> dict:
+        """
+        从 IW 后验计算 t 分布预测区间
+
+        注意: 由于块对角先验对组间协方差的抑制,
+        城市总量区间使用经验误差标准差校准 (conservative).
+        """
+        from scipy.stats import t as t_dist
+
+        if self.tilde_b is None:
+            raise RuntimeError("Must call .reconcile() before .prediction_interval()")
+
+        alpha = (1 - level) / 2
+        t_quantile = t_dist.ppf(1 - alpha, df=self.tilde_nu)
+
+        T, n_b = self.tilde_b.shape
+
+        # 逐节点边际标准差
+        margin_var = np.diag(self.Psi_prime[:n_b, :n_b]) / self.tilde_nu
+        margin_std = np.sqrt(np.maximum(margin_var, 0))
+
+        lower = np.maximum(self.tilde_b - t_quantile * margin_std, 0)
+        upper = np.maximum(self.tilde_b + t_quantile * margin_std, 0)
+
+        # 城市总量: 使用 reconciled 误差经验分布
+        ones = np.ones(n_b)
+        city = self.tilde_b @ ones
+        city_err_std = np.std(city)
+        city_lower = city - t_quantile * city_err_std
+        city_upper = city + t_quantile * city_err_std
+
+        return {'lower': lower, 'upper': upper,
+                'city_lower': np.maximum(city_lower, 0),
+                'city_upper': np.maximum(city_upper, 0),
+                'level': level, 't_quantile': t_quantile,
+                'nu': self.tilde_nu}
