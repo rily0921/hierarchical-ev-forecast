@@ -67,7 +67,7 @@ lgb_early_stop: 30
 
 # -- 分组建模 ------------------------------------------
 grouped_model:
-  embed_dim: 4          # TAZ 标识变量的 embedding 维度
+  taz_categorical: true  # TAZ ID 作为 categorical feature (LightGBM native split)
 
 # -- 计算资源 ------------------------------------------
 compute:

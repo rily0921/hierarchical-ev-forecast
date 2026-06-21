@@ -150,7 +150,7 @@ def run_experiment(exp_name: str, cfg: dict, reconcile_filter: list = None):
         # 分组建模
         trainer = GroupedQuantileTrainer(
             taus, lgb_bottom,
-            embed_dim=cfg['grouped_model']['embed_dim'],
+            taz_categorical=True  # TAZ categorical feature (not a learned embedding),
             early_stop=cfg['lgb_early_stop'],
             n_jobs_lgb=cfg['compute']['n_jobs_lgb'],
         )

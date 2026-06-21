@@ -89,7 +89,7 @@ for K in K_LIST:
 
     # 4. 分组建模底层
     group_members = [np.where(labels == g)[0].tolist() for g in range(K)]
-    trainer_g = GroupedQuantileTrainer(TAUS_MED, LGB_BOTTOM, embed_dim=4, early_stop=30)
+    trainer_g = GroupedQuantileTrainer(TAUS_MED, LGB_BOTTOM, taz_categorical=True, early_stop=30)
     p_bot_val_g, p_bot_g = trainer_g.train_all_groups(
         group_members, occ_bot, fb, n_train, n_val, n_jobs_parallel=min(K, 10)
     )

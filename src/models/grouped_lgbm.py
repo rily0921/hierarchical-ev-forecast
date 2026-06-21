@@ -9,7 +9,7 @@ LightGBM 分组建模训练器 — 组内共享参数 + TAZ embedding
   - 一套参数服务组内多个 TAZ → 缓解稀疏节点的数据不足问题
 
 用法:
-    trainer = GroupedQuantileTrainer(taus, lgb_params, embed_dim=4, early_stop=30)
+    trainer = GroupedQuantileTrainer(taus, lgb_params, taz_categorical=True, early_stop=30)
     p_val, p_test = trainer.train_one_group(
         members, occ_bottom, feature_builder, n_train, n_val
     )
@@ -27,18 +27,18 @@ class GroupedQuantileTrainer:
     """分组建模：组内 TAZ 共享参数 + TAZ ID 标识"""
 
     def __init__(self, taus: list, lgb_params: dict,
-                 embed_dim: int = 4, early_stop: int = 30,
+                 taz_categorical: bool = True, early_stop: int = 30,
                  n_jobs_lgb: int = 4):
         """
-        taus:        分位点列表
-        lgb_params:  LightGBM 参数字典
-        embed_dim:   TAZ ID 用作 categorical feature 时的维度 (LightGBM 自动处理)
-        early_stop:  早停轮数
-        n_jobs_lgb:  LightGBM 内部线程数
+        taus:             分位点列表
+        lgb_params:       LightGBM 参数字典
+        taz_categorical:  是否将 TAZ ID 作为 categorical feature (tree split, 非embedding)
+        early_stop:       早停轮数
+        n_jobs_lgb:       LightGBM 内部线程数
         """
         self.taus = taus
         self.lgb_params = lgb_params
-        self.embed_dim = embed_dim
+        self.taz_categorical = taz_categorical
         self.early_stop = early_stop
         self.n_jobs_lgb = n_jobs_lgb
         # 独立训练器 (用于单节点组降级)

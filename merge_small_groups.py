@@ -109,7 +109,7 @@ def run_experiment(name, labels, K):
     occ_top = occ_bot.sum(axis=1)
 
     group_members = [np.where(labels == g)[0].tolist() for g in range(K)]
-    trainer_g = GroupedQuantileTrainer(TAUS_MED, LGB_BOTTOM, embed_dim=4, early_stop=30)
+    trainer_g = GroupedQuantileTrainer(TAUS_MED, LGB_BOTTOM, taz_categorical=True, early_stop=30)
     p_bot_val, p_bot = trainer_g.train_all_groups(
         group_members, occ_bot, fb, n_train, n_val, n_jobs_parallel=min(K, 10)
     )
