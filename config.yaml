@@ -1,0 +1,148 @@
+# ============================================================
+# 层次概率预测 — 统一配置文件
+# 替代原来散落在 G1-G8 各脚本头部的参数
+# ============================================================
+
+# [路径]
+paths:
+  raw_data: "E:/Desktop/毕业论文/data/UrbanEV-main/UrbanEV-main/data"
+  output: "E:/Desktop/毕业论文/code/output"
+  admin_map: "E:/Desktop/毕业论文/code/chapter3/data/processed/district_mapping.json"
+  # 以下由 02_build_all_hierarchies.py 生成
+  S_admin: "E:/Desktop/毕业论文/code/output/S_admin.npy"
+  S_spatial: "E:/Desktop/毕业论文/code/output/S_spatial.npy"
+  S_behavior: "E:/Desktop/毕业论文/code/output/S_behavior.npy"
+  hierarchy_meta: "E:/Desktop/毕业论文/code/output/hierarchy_meta.json"
+
+# -- 数据划分 ------------------------------------------
+data:
+  train_hours: 2880    # 2022-09-01 ~ 2022-12-29
+  val_hours: 720        # 2022-12-30 ~ 2023-01-28
+  # test_hours = 4344 - train - val = 744  (自动计算)
+
+# -- 特征工程 ------------------------------------------
+features:
+  lag_hours: [1, 2, 3, 24, 48, 168]
+  roll_hours: [6, 24]
+  max_lag: 168   # = max(lag_hours)
+
+  time:
+    - hour_sin
+    - hour_cos
+    - wday_sin
+    - wday_cos
+    - is_weekend
+    - month
+
+  weather:
+    - T       # 温度 (中心站+机场均值)
+    - U       # 湿度
+    - P       # 气压
+    - nRAIN   # 降雨标志 (中心站)
+
+# -- 分位数回归 ----------------------------------------
+quantile:
+  taus: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50,
+         0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+  monotonic_sort: true
+  n_scenarios: 500      # 场景生成数量
+
+# -- LightGBM 默认参数 ---------------------------------
+lgb_defaults:
+  n_estimators: 300
+  learning_rate: 0.08
+  num_leaves: 31
+  min_child_samples: 20
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 0.1
+  random_state: 42
+  verbose: -1
+
+lgb_top:   # 顶层覆盖：更保守的学习率
+  learning_rate: 0.05
+
+lgb_early_stop: 30
+
+# -- 分组建模 ------------------------------------------
+grouped_model:
+  embed_dim: 4          # TAZ 标识变量的 embedding 维度
+
+# -- 计算资源 ------------------------------------------
+compute:
+  n_jobs_lgb: 4         # LightGBM 内部线程数
+  n_jobs_parallel: 10    # joblib 外层并行数 (≤ 中层节点数)
+
+# -- 调和 ----------------------------------------------
+reconciliation:
+  covariance_source: "validation"   # 验证集残差 (不是测试集!)
+  shrinkage: "ledoit_wolf"
+  min_eigenvalue: 1.0e-8           # 矩阵求逆的正则化项
+
+# ============================================================
+# 实验定义
+# ============================================================
+experiments:
+
+  E1:
+    description: "两层直调 + 独立建模(275) + MinT-shrink/diag"
+    hierarchy: two_level
+    bottom_strategy: independent
+    reconciliation: [mint_shrink, mint_diag]
+
+  E2:
+    description: "行政中层(8) + 独立建模(275) + MinT-shrink/diag"
+    hierarchy: admin
+    bottom_strategy: independent
+    reconciliation: [mint_shrink, mint_diag]
+
+  E3:
+    description: "行政中层(8) + 行政分组(8组) + MinT-shrink/diag"
+    hierarchy: admin
+    bottom_strategy: grouped
+    group_source: admin
+    reconciliation: [mint_shrink, mint_diag]
+
+  E4:
+    description: "行为中层(10) + 独立建模(275) + MinT-shrink/diag"
+    hierarchy: behavior
+    bottom_strategy: independent
+    reconciliation: [mint_shrink, mint_diag]
+
+  E5:
+    description: "行为中层(10) + 行为分组(10组) + MinT-shrink/diag"
+    hierarchy: behavior
+    bottom_strategy: grouped
+    group_source: behavior
+    reconciliation: [mint_shrink, mint_diag]
+
+  E6:
+    description: "行为中层(10) + 行为分组(10组) + 分位数特定MinT"
+    hierarchy: behavior
+    bottom_strategy: grouped
+    group_source: behavior
+    reconciliation: [mint_quantile_specific]
+
+  # -- 正交实验组 (中层 ≠ 分组依据) -----------------
+  E7:
+    description: "行为中层(10) + 行政分组(8组) [正交: 中层≠分组]"
+    hierarchy: behavior
+    bottom_strategy: grouped
+    group_source: admin
+    reconciliation: [mint_shrink, mint_diag]
+
+  E8:
+    description: "行政中层(8) + 行为分组(10组) [正交: 中层≠分组]"
+    hierarchy: admin
+    bottom_strategy: grouped
+    group_source: behavior
+    reconciliation: [mint_shrink, mint_diag]
+
+  # -- GA-MinT 验证 (在最优配置 E5 上测试) ----------
+  E5_GA:
+    description: "行为中层(10) + 行为分组(10组) + GA-MinT变体对比"
+    hierarchy: behavior
+    bottom_strategy: grouped
+    group_source: behavior
+    reconciliation: [mint_shrink, ga_mint_bd, ga_mint_gas]

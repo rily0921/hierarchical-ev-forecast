@@ -1,0 +1,21 @@
+# 数据文件 (不上传)
+output/
+chapter3/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 草稿
+draft/
+
+# 论文相关
+*.docx
+*.pdf
+
+# 系统文件
+.DS_Store
+Thumbs.db
